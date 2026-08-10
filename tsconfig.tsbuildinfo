@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/components/chatworkspace.tsx","./src/components/connectiondialog.tsx","./src/components/sidebar.tsx","./src/lib/api.ts","./src/lib/db.ts","./src/lib/endpoint.test.ts","./src/lib/endpoint.ts"],"version":"5.9.3"}
