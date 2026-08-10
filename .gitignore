@@ -12,3 +12,6 @@ npm-debug.log*
 Thumbs.db
 coverage
 .vite
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js
