@@ -1,116 +1,87 @@
-const DB_NAME = "galaxy-db";
-const originalFetch = window.fetch.bind(window);
-let selectedModel = "";
-let modelIds = [];
-let activeEndpointKey = "";
-let selector = null;
-let loadingModels = false;
+(() => {
+  "use strict";
 
-function openDatabase() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
+  const originalFetch = window.fetch.bind(window);
+  const state = { model: "", models: [] };
+  let select;
 
-function readAll(storeName) {
-  return openDatabase().then((db) => new Promise((resolve, reject) => {
-    const transaction = db.transaction(storeName, "readonly");
-    const request = transaction.objectStore(storeName).getAll();
-    request.onsuccess = () => resolve(request.result || []);
-    request.onerror = () => reject(request.error);
-  }));
-}
-
-async function findActiveEndpoint() {
-  const [endpoints, preferences] = await Promise.all([
-    readAll("endpoints"),
-    readAll("preferences"),
-  ]);
-  const activeId = preferences.find((item) => item.key === "activeEndpointId")?.value;
-  return endpoints.find((endpoint) => endpoint.id === activeId) || endpoints[0] || null;
-}
-
-function ensureToolbar() {
-  if (selector || !document.body) return;
-
-  const toolbar = document.createElement("div");
-  toolbar.id = "galaxy-model-toolbar";
-  toolbar.style.cssText = [
-    "position:fixed", "top:8px", "right:16px", "z-index:2147483647",
-    "display:flex", "align-items:center", "gap:8px", "padding:5px 8px",
-    "background:var(--color-surface,#13161A)", "border:1px solid var(--color-border,#252A31)",
-    "border-radius:6px", "box-shadow:0 4px 12px rgba(0,0,0,.4)", "font:12px monospace",
-  ].join(";");
-
-  const label = document.createElement("span");
-  label.textContent = "Model";
-  label.style.color = "var(--color-text-secondary,#8E96A3)";
-  selector = document.createElement("select");
-  selector.title = "Model used for the next message";
-  selector.style.cssText = "max-width:240px;height:28px;padding:0 7px;background:var(--color-bg,#090A0C);color:var(--color-text,#F2F4F7);border:1px solid var(--color-border,#252A31);border-radius:4px;font:12px monospace";
-  selector.addEventListener("change", () => { selectedModel = selector.value; });
-  toolbar.append(label, selector);
-  document.body.appendChild(toolbar);
-}
-
-function updateSelector() {
-  if (!selector || !modelIds.length) return;
-  const currentValue = selectedModel || selector.value;
-  if (selector.dataset.models !== modelIds.join("\n")) {
-    selector.replaceChildren(...modelIds.map((id) => new Option(id, id)));
-    selector.dataset.models = modelIds.join("\n");
-  }
-  selectedModel = modelIds.includes(currentValue) ? currentValue : modelIds[0];
-  selector.value = selectedModel;
-  selector.disabled = false;
-}
-
-async function loadModels() {
-  if (loadingModels) return;
-  loadingModels = true;
-  try {
-    const endpoint = await findActiveEndpoint();
-    if (!endpoint?.baseUrl) return;
-    const endpointKey = `${endpoint.id}:${endpoint.baseUrl}:${endpoint.apiKey}`;
-    if (endpointKey === activeEndpointKey && modelIds.length) return;
-    const response = await originalFetch(`${endpoint.baseUrl.replace(/\/+$/, "")}/models`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${endpoint.apiKey}`, "Content-Type": "application/json" },
+  function dbRead(storeName) {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open("galaxy-db");
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const db = request.result;
+        const transaction = db.transaction(storeName, "readonly");
+        const read = transaction.objectStore(storeName).getAll();
+        read.onsuccess = () => resolve(read.result || []);
+        read.onerror = () => reject(read.error);
+      };
     });
-    if (!response.ok) return;
-    const payload = await response.json();
-    const nextModels = Array.isArray(payload.data)
-      ? payload.data.map((model) => String(model.id || "")).filter(Boolean)
-      : [];
-    if (!nextModels.length) return;
-    activeEndpointKey = endpointKey;
-    modelIds = nextModels;
-    selectedModel = modelIds.includes(endpoint.defaultModel) ? endpoint.defaultModel : modelIds[0];
-    ensureToolbar();
-    updateSelector();
-  } catch {
-    // Keep the normal chat available when an endpoint cannot list models.
-  } finally {
-    loadingModels = false;
   }
-}
 
-window.fetch = (input, init = {}) => {
-  const url = typeof input === "string" ? input : input?.url || "";
-  if (selectedModel && /\/chat\/completions(?:\?|$)/.test(url) && init.body) {
+  function createControl() {
+    if (select || !document.body) return;
+
+    const wrapper = document.createElement("label");
+    wrapper.textContent = "Model ";
+    wrapper.title = "Model yang digunakan untuk pesan berikutnya";
+    wrapper.style.cssText = "position:fixed;top:10px;right:16px;z-index:1000;padding:6px 8px;background:#13161a;color:#8e96a3;border:1px solid #252a31;border-radius:6px;font:12px monospace";
+
+    select = document.createElement("select");
+    select.style.cssText = "margin-left:6px;max-width:240px;height:26px;background:#090a0c;color:#f2f4f7;border:1px solid #252a31;border-radius:4px;font:12px monospace";
+    select.disabled = true;
+    select.addEventListener("change", () => { state.model = select.value; });
+    wrapper.appendChild(select);
+    document.body.appendChild(wrapper);
+  }
+
+  function showModels(models, defaultModel) {
+    state.models = models;
+    state.model = models.includes(defaultModel) ? defaultModel : models[0] || "";
+    if (!select) return;
+    select.replaceChildren(...models.map((id) => new Option(id, id)));
+    select.value = state.model;
+    select.disabled = models.length === 0;
+  }
+
+  async function loadModels() {
     try {
-      const body = JSON.parse(init.body);
-      body.model = selectedModel;
-      init = { ...init, body: JSON.stringify(body) };
+      const [endpoints, preferences] = await Promise.all([
+        dbRead("endpoints"),
+        dbRead("preferences"),
+      ]);
+      const activeId = preferences.find((item) => item.key === "activeEndpointId")?.value;
+      const endpoint = endpoints.find((item) => item.id === activeId) || endpoints[0];
+      if (!endpoint?.baseUrl) return;
+
+      const response = await originalFetch(`${endpoint.baseUrl.replace(/\/+$/, "")}/models`, {
+        headers: { Authorization: `Bearer ${endpoint.apiKey}`, "Content-Type": "application/json" },
+      });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const models = Array.isArray(payload.data)
+        ? payload.data.map((item) => String(item.id || "")).filter(Boolean)
+        : [];
+      showModels(models, endpoint.defaultModel);
     } catch {
-      // Leave non-JSON requests unchanged.
+      // Model discovery is optional and must not block the chat application.
     }
   }
-  return originalFetch(input, init);
-};
 
-ensureToolbar();
-loadModels();
-window.setInterval(loadModels, 2500);
+  window.fetch = (input, init) => {
+    const url = typeof input === "string" ? input : input?.url || "";
+    if (!state.model || !/\/chat\/completions(?:\?|$)/.test(url) || !init?.body) {
+      return originalFetch(input, init);
+    }
+    try {
+      const body = JSON.parse(init.body);
+      body.model = state.model;
+      return originalFetch(input, { ...init, body: JSON.stringify(body) });
+    } catch {
+      return originalFetch(input, init);
+    }
+  };
+
+  createControl();
+  window.setTimeout(loadModels, 1000);
+})();
